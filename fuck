@@ -1,0 +1,42 @@
+#!/bin/bash
+
+port=8000
+#export DISPLAY=":0"
+
+if [[ -z $1 ]]; then
+  echo "Usage: $0 character_name"
+  exit
+fi
+
+if [[ -z $DISPLAY ]]; then
+  echo "Detected empty DISPLAY setting, defaulting to :0"
+  export DISPLAY=:0
+fi
+
+if ps aux | \grep [l]ich | \grep -i $1; then
+  lich_instance=$(ps aux | \grep [l]ich | \grep $1)
+  already_connected="1"
+  port=$(echo "$lich_instance" | sed 's/^.*[d]etachable-client=\([0-9]\+\).*$/\1/' | sort | tail -n1)
+  echo "Detecting existing connection on port $port"
+else
+  if ps a | \grep [d]etachable-client; then
+    max_port=$(ps a | \grep [d]etachable-client | sed 's/^.*[d]etachable-client=\([0-9]\+\).*$/\1/' | sort | tail -n1)
+
+    port=$(expr $max_port + 1)
+  fi
+  echo "Detecting existing clients but no connection for this character. Using port $port"
+
+  ruby ~/lich/lich.rb --login $1 --without-frontend --detachable-client=$port 2> /dev/null &
+  sleep 2
+fi
+
+for i in {1..10}; do
+  echo "Attempting to connect to lich process... "
+  if ruby ./profanity.rb --port=$port; then
+    echo "Done"
+    break
+  else
+    echo "Failed to establish connection, trying again in 3 seconds..."
+    sleep 3
+  fi
+done
