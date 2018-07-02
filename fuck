@@ -13,8 +13,8 @@ if [[ -z $DISPLAY ]]; then
   export DISPLAY=:0
 fi
 
-if ps aux | \grep [l]ich | \grep -i $1; then
-  lich_instance=$(ps aux | \grep [l]ich | \grep $1)
+if ps aux | \grep lich[.]rb | \grep -i $1; then
+  lich_instance=$(ps aux | \grep lich[.]rb | \grep -i $1)
   already_connected="1"
   port=$(echo "$lich_instance" | sed 's/^.*[d]etachable-client=\([0-9]\+\).*$/\1/' | sort | tail -n1)
   echo "Detecting existing connection on port $port"
