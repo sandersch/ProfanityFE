@@ -1,0 +1,3 @@
+#!/bin/bash
+
+cat ~/.profanity.xml | sed -e "s/'lnet,thoughts,voln'/'familiar'/" | sed -e "s/'familiar,speech'/'speech'/" > profanity_ebongate.xml
