@@ -31,7 +31,7 @@ fi
 
 PROFANITY_CMD="ruby ./profanity.rb --port=$port"
 
-if [[ "$1" =~ ^(Gortun|Monit)$ ]]; then
+if [[ "$1" =~ ^(Gortun|Monit|Sazyd|Reodin)$ ]]; then
   PROFANITY_CMD="$PROFANITY_CMD --settings-file=profanity_ebongate.xml"
 fi
 

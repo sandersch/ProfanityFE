@@ -1,3 +1,9 @@
 #!/bin/bash
 
-cat ~/.profanity.xml | sed -e "s/'lnet,thoughts,voln'/'familiar'/" | sed -e "s/'familiar,speech'/'speech'/" > profanity_ebongate.xml
+cat ~/.profanity.xml \
+  | sed -e "/'familiar,speech'/d" \
+  | sed -e "s/'lnet,thoughts,voln'/'familiar,speech'/" \
+  | sed -e "s/<window class='text' .* value='main.*/<window class='text' top='6' left='12' width='cols-12' height='lines-7' value='main,lnet,thoughts,voln' buffer-size='100000' \/>/" \
+  > profanity_ebongate.xml
+
+#  | sed -e "s/'main'/'main,lnet,thoughts,voln'/" \
