@@ -30,7 +30,93 @@ require 'thread'
 require 'socket'
 require 'rexml/document'
 require 'curses'
+require 'fileutils'
+require 'ostruct'
+
 include Curses
+
+module Opts
+  FLAG_PREFIX    = "--"
+  
+  def self.parse_command(h, c)
+    h[c.to_sym] = true
+  end
+
+  def self.parse_flag(h, f)
+    (name, val) = f[2..-1].split("=")
+    if val.nil?
+      h[name.to_sym] = true
+    else
+      val = val.split(",")
+
+      h[name.to_sym] = val.size == 1 ? val.first : val
+    end
+  end
+
+  def self.parse(args = ARGV)    
+    config = OpenStruct.new  
+		if args.size > 0
+			config = OpenStruct.new(**args.reduce(Hash.new) do |h, v|
+				if v.start_with?(FLAG_PREFIX)
+					parse_flag(h, v)
+				else
+					parse_command(h, v)
+				end
+				h
+			end)
+		end
+    config
+	end
+	
+	PARSED = parse()
+
+  def self.method_missing(method, *args)
+    PARSED.send(method, *args)
+  end
+end
+
+module Profanity
+	APP_DIR = Dir.home + "/." + self.name.downcase
+	##
+	## setup app dir
+	##
+	FileUtils.mkdir_p APP_DIR
+
+	def self.app_file(path)
+		APP_DIR + "/" + path
+	end
+
+	LOG_FILE       = app_file "debug.log"
+	SETTINGS_FILE  = app_file "default.xml"
+
+	def self.log_file
+		return File.open(LOG_FILE, 'a') { |file| yield file } if block_given?
+	end
+
+	def self.set_terminal_title(title)
+		system("printf \"\033]0;#{title}\007\"")
+		Process.setproctitle title
+	end
+
+	def self.log(str)
+		log_file { |f| f.puts str }
+	end
+
+	def self.help_menu()
+		puts <<~HELP
+	
+			Profanity FrontEnd v#{$version}
+				
+			--port=<port>
+				--default-color-id=<id>
+				--default-background-color-id=<id>
+				--custom-colors=<on|off>
+				--settings-file=<filename>
+				--char=<character>
+		HELP
+		exit
+	end
+end
 
 Curses.init_screen
 Curses.start_color
@@ -385,7 +471,7 @@ class IndicatorWindow < Curses::Window
 	def redraw
 		setpos(0,0)
 		if @value
-			if @value.class == Fixnum
+			if @value.is_a?(Integer)
 				attron(color_pair(get_color_pair_id(@fg[@value], @bg[@value]))|Curses::A_NORMAL) { addstr @label }
 			else
 				attron(color_pair(get_color_pair_id(@fg[1], @bg[1]))|Curses::A_NORMAL) { addstr @label }
@@ -432,49 +518,23 @@ SCROLL_WINDOW = Array.new
 def add_prompt(window, prompt_text, cmd="")
   window.add_string("#{prompt_text}#{cmd}", [ h={ :start => 0, :end => (prompt_text.length + cmd.length), :fg => '555555' } ])
 end
+fix_setting = { 'on' => true, 'yes' => true, 'off' => false, 'no' => false }
 
-for arg in ARGV
-	if arg =~ /^\-\-help|^\-h|^\-\?/
-		puts ""
-		puts "Profanity FrontEnd v#{$version}"
-		puts ""
-		puts "   --port=<port>"
-		puts "   --default-color-id=<id>"
-		puts "   --default-background-color-id=<id>"
-		puts "   --custom-colors=<on|off>"
-		puts "   --settings-file=<filename>"
-		puts ""
-		exit
-	elsif arg =~ /^\-\-port=([0-9]+)$/
-		PORT = $1.to_i
-	elsif arg =~ /^\-\-default\-color\-id=([0-9]+)$/
-		DEFAULT_COLOR_ID = $1.to_i
-	elsif arg =~ /^\-\-default\-background\-color\-id=([0-9]+)$/
-		DEFAULT_BACKGROUND_COLOR_ID = $1.to_i
-	elsif arg =~ /^\-\-custom\-colors=(on|off|yes|no)$/
-		fix_setting = { 'on' => true, 'yes' => true, 'off' => false, 'no' => false }
-		CUSTOM_COLORS = fix_setting[$1]
-	elsif arg =~ /^\-\-settings\-file=(.*?)$/
-		SETTINGS_FILENAME = $1
-	end
-end
+PORT                        = (Opts.port                || 8000).to_i
+HOST                        = (Opts.host                || "127.0.0.1")
+DEFAULT_COLOR_ID            = (Opts.color_id            || 7).to_i            
+DEFAULT_BACKGROUND_COLOR_ID = (Opts.background_color_id || 0).to_i
+SETTINGS_FILENAME           = Profanity.app_file(Opts.char.downcase + ".xml") if Opts.char
 
-def log(value)
-		File.open('profanity.log', 'a') { |f| f.puts value }
-end
-
-unless defined?(PORT)
-	PORT = 8000
-end
-unless defined?(DEFAULT_COLOR_ID)
-	DEFAULT_COLOR_ID = 7
-end
-unless defined?(DEFAULT_BACKGROUND_COLOR_ID)
-	DEFAULT_BACKGROUND_COLOR_ID = 0
-end
 unless defined?(SETTINGS_FILENAME)
-	SETTINGS_FILENAME = File.expand_path('~/.profanity.xml')
+	raise Exception, <<~ERROR
+		you pust pass --char=<character>
+		#{Opts.parse()}
+	ERROR
 end
+
+Profanity.set_terminal_title(Opts.char.capitalize)
+
 unless defined?(CUSTOM_COLORS)
 	CUSTOM_COLORS = Curses.can_change_color?
 end
@@ -482,115 +542,6 @@ end
 DEFAULT_COLOR_CODE = Curses.color_content(DEFAULT_COLOR_ID).collect { |num| ((num/1000.0)*255).round.to_s(16) }.join('').rjust(6, '0')
 DEFAULT_BACKGROUND_COLOR_CODE = Curses.color_content(DEFAULT_BACKGROUND_COLOR_ID).collect { |num| ((num/1000.0)*255).round.to_s(16) }.join('').rjust(6, '0')
 
-unless File.exists?(SETTINGS_FILENAME)
-
-	File.open(SETTINGS_FILENAME, 'w') { |file| file.write "<settings>
-	<highlight fg='9090ff'>^(?:You gesture|You intone a phrase of elemental power|You recite a series of mystical phrases|You trace a series of glowing runes|Your hands glow with power as you invoke|You trace a simple rune while intoning|You trace a sign while petitioning the spirits|You trace an intricate sign that contorts in the air).*$</highlight>
-	<highlight fg='9090ff'>^(?:Cast Roundtime 3 Seconds\\.|Your spell is ready\\.)$</highlight>
-	<highlight fg='9090ff'>^.*remaining\\. \\]$</highlight>
-	<highlight fg='88aaff'>([A-Z][a-z]+ disk)</highlight>
-	<highlight fg='555555'>^\\[.*?\\](?:>|&gt;).*$</highlight>
-	<highlight fg='555555'>\\([0-9][0-9]\\:[0-9][0-9]\\:[0-9][0-9]\\)$</highlight>
-	<highlight fg='0000ff'>^\\[LNet\\]</highlight>
-	<highlight fg='008000'>^\\[code\\]</highlight>
-	<highlight fg='808000'>^\\[Shattered\\]</highlight>
-	<highlight fg='ffffff'>^\\[Private(?:To)?\\]</highlight>
-	<highlight fg='008000'>^--- Lich:.*</highlight>
-	<highlight fg='565656'>\\((?:calmed|dead|flying|hiding|kneeling|prone|sitting|sleeping|stunned)\\)</highlight>
-	<highlight fg='ff0000'>^.* throws (?:his|her) arms skyward!$|swirling black void|(?:Dozens of flaming meteors light the sky nearby!|Several flaming meteors light the nearby sky!|Several flaming rocks burst from the sky and smite the area!|A low roar of quickly parting air can be heard above!)</highlight>
-	<highlight fg='ffffff'>^.*(?:falls slack against the floor|falls slack against the ground|falls to the floor, motionless|falls to the ground dead|falls to the ground motionless|and dies|and lies still|goes still|going still)\\.$</highlight>
-	<highlight fg='ffffff'>^.* is stunned!$|^You come out of hiding\\.$</highlight>
-	<highlight fg='ffaaaa'>.*ruining your hiding place\\.$|^You are no longer hidden\\.$|^\\s*You are (?:stunned|knocked to the ground).*|^You are unable to remain hidden!$|^You are visible again\\.$|^You fade into sight\\.$|^You fade into view.*|^You feel drained!$|^You have overextended yourself!$|^You feel yourself going into shock!$</highlight>
-	<preset id='whisper' fg='66ff66'/>
-	<preset id='speech' fg='66ff66'/>
-	<preset id='roomName' fg='ffffff'/>
-	<preset id='monsterbold' fg='d2bc2a'/>
-	<preset id='familiar' bg='00001a'/>
-	<preset id='thoughts' bg='001a00'/>
-	<preset id='voln' bg='001a00'/>
-	<key id='alt'>
-		<key id='f' macro='something'/>
-	</key>
-	<key id='enter' action='send_command'/>
-	<key id='left' action='cursor_left'/>
-	<key id='right' action='cursor_right'/>
-	<key id='ctrl+left' action='cursor_word_left'/>
-	<key id='ctrl+right' action='cursor_word_right'/>
-	<key id='home' action='cursor_home'/>
-	<key id='end' action='cursor_end'/>
-	<key id='backspace' action='cursor_backspace'/>
-	<key id='win_backspace' action='cursor_backspace'/>
-	<key id='ctrl+?' action='cursor_backspace'/>
-	<key id='delete' action='cursor_delete'/>
-	<key id='tab' action='switch_current_window'/>
-	<key id='alt+page_up' action='scroll_current_window_up_one'/>
-	<key id='alt+page_down' action='scroll_current_window_down_one'/>
-	<key id='page_up' action='scroll_current_window_up_page'/>
-	<key id='page_down' action='scroll_current_window_down_page'/>
-	<key id='up' action='previous_command'/>
-	<key id='down' action='next_command'/>
-	<key id='ctrl+up' action='send_last_command'/>
-	<key id='alt+up' action='send_second_last_command'/>
-	<key id='resize' action='resize'/>
-	<key id='ctrl+d' macro='\\xstance defensive\\r'/>
-	<key id='ctrl+o' macro='\\xstance offensive\\r'/>
-	<key id='ctrl+g' macro='\\xremove my buckler\\r'/>
-	<key id='ctrl+p' macro='\\xwear my buckler\\r'/>
-	<key id='ctrl+f' macro='\\xtell familiar to '/>
-	<layout id='default'>
-		<window class='text' top='6' left='12' width='cols-12' height='lines-7' value='main' buffer-size='2000' />
-		<window class='text' top='0' left='0' height='6' width='cols' value='lnet,thoughts,voln' buffer-size='1000' />
-		<window class='text' top='7' left='0' width='11' height='lines-31' value='death,logons' buffer-size='500' />
-
-		<window class='indicator' top='lines-1' left='12' height='1' width='1' label='&gt;' value='prompt' fg='444444,44444'/>
-		<window class='command' top='lines-1' left='13' width='cols-13' height='1' />
-
-		<window class='progress' top='lines-11' left='0' width='11' height='1' label='stance:' value='stance' bg='290055'/>
-		<window class='progress' top='lines-10' left='0' width='11' height='1' label='mind:' value='mind' bg='663000,442000'/>
-		<window class='progress' top='lines-8' left='0' width='11' height='1' label='health:' value='health' bg='004800,003300'/>
-		<window class='progress' top='lines-7' left='0' width='11' height='1' label='spirit:' value='spirit' bg='333300,222200'/>
-		<window class='progress' top='lines-6' left='0' width='11' height='1' label='mana:' value='mana' bg='0000a0,000055'/>
-		<window class='progress' top='lines-5' left='0' width='11' height='1' label='stam:' value='stamina' bg='003333,002222'/>
-		<window class='progress' top='lines-3' left='0' width='11' height='1' label='load:' value='encumbrance' bg='990033,4c0019' fg='nil,nil,nil,444444'/>
-
-		<window class='countdown' top='lines-2' left='0' width='11' height='1' label='stun:' value='stunned' fg='444444,dddddd' bg='nil,aa0000'/>
-		<window class='countdown' top='lines-1' left='0' width='11' height='1' label='rndtime:' value='roundtime' fg='444444,dddddd,dddddd,dddddd' bg='nil,aa0000,0000aa'/>
-
-		<window class='indicator' top='lines-15' left='1' height='1' width='1' label='^' value='compass:up' fg='444444,ffff00'/>
-		<window class='indicator' top='lines-14' left='1' height='1' width='1' label='o' value='compass:out' fg='444444,ffff00'/>
-		<window class='indicator' top='lines-13' left='1' height='1' width='1' label='v' value='compass:down' fg='444444,ffff00'/>
-		<window class='indicator' top='lines-15' left='5' height='1' width='1' label='*' value='compass:nw' fg='444444,ffff00'/>
-		<window class='indicator' top='lines-14' left='5' height='1' width='1' label='&lt;' value='compass:w' fg='444444,ffff00'/>
-		<window class='indicator' top='lines-13' left='5' height='1' width='1' label='*' value='compass:sw' fg='444444,ffff00'/>
-		<window class='indicator' top='lines-15' left='7' height='1' width='1' label='^' value='compass:n' fg='444444,ffff00'/>
-		<window class='indicator' top='lines-13' left='7' height='1' width='1' label='v' value='compass:s' fg='444444,ffff00'/>
-		<window class='indicator' top='lines-15' left='9' height='1' width='1' label='*' value='compass:ne' fg='444444,ffff00'/>
-		<window class='indicator' top='lines-14' left='9' height='1' width='1' label='&gt;' value='compass:e' fg='444444,ffff00'/>
-		<window class='indicator' top='lines-13' left='9' height='1' width='1' label='*' value='compass:se' fg='444444,ffff00'/>
-
-		<window class='indicator' top='lines-23' left='1' height='1' width='1' label='e' value='leftEye' fg='444444,ffff00,ff6600,ff0000,00ffff,0066ff,0000ff'/>
-		<window class='indicator' top='lines-23' left='5' height='1' width='1' label='e' value='rightEye' fg='444444,ffff00,ff6600,ff0000,00ffff,0066ff,0000ff'/>
-		<window class='indicator' top='lines-22' left='3' height='1' width='1' label='O' value='head' fg='444444,ffff00,ff6600,ff0000,00ffff,0066ff,0000ff'/>
-		<window class='indicator' top='lines-21' left='2' height='1' width='1' label='/' value='leftArm' fg='444444,ffff00,ff6600,ff0000,00ffff,0066ff,0000ff'/>
-		<window class='indicator' top='lines-21' left='3' height='1' width='1' label='|' value='chest' fg='444444,ffff00,ff6600,ff0000,00ffff,0066ff,0000ff'/>
-		<window class='indicator' top='lines-21' left='4' height='1' width='1' label='\\' value='rightArm' fg='444444,ffff00,ff6600,ff0000,00ffff,0066ff,0000ff'/>
-		<window class='indicator' top='lines-20' left='1' height='1' width='1' label='o' value='leftHand' fg='444444,ffff00,ff6600,ff0000,00ffff,0066ff,0000ff'/>
-		<window class='indicator' top='lines-20' left='3' height='1' width='1' label='|' value='abdomen' fg='444444,ffff00,ff6600,ff0000,00ffff,0066ff,0000ff'/>
-		<window class='indicator' top='lines-20' left='5' height='1' width='1' label='o' value='rightHand' fg='444444,ffff00,ff6600,ff0000,00ffff,0066ff,0000ff'/>
-		<window class='indicator' top='lines-19' left='1' height='2' width='2' label=' /o' value='leftLeg' fg='444444,ffff00,ff6600,ff0000,00ffff,0066ff,0000ff'/>
-		<window class='indicator' top='lines-19' left='4' height='2' width='2' label='\\  o' value='rightLeg' fg='444444,ffff00,ff6600,ff0000,00ffff,0066ff,0000ff'/>
-		<window class='indicator' top='lines-23' left='8' height='1' width='2' label='ns' value='nsys' fg='444444,ffff00,ff6600,ff0000,00ffff,0066ff,0000ff'/>
-		<window class='indicator' top='lines-21' left='8' height='1' width='2' label='nk' value='neck' fg='444444,ffff00,ff6600,ff0000,00ffff,0066ff,0000ff'/>
-		<window class='indicator' top='lines-19' left='8' height='1' width='2' label='bk' value='back' fg='444444,ffff00,ff6600,ff0000,00ffff,0066ff,0000ff'/>
-
-		<window class='indicator' top='lines-17' left='0' height='1' width='3' label='psn' value='poisoned' fg='444444,ff0000'/>
-		<window class='indicator' top='lines-17' left='4' height='1' width='3' label='dis' value='diseased' fg='444444,ff0000'/>
-		<window class='indicator' top='lines-17' left='8' height='1' width='3' label='bld' value='bleeding' fg='444444,ff0000'/>
-	</layout>
-</settings>
-" }
-
-end
 
 xml_escape_list = {
 	'&lt;'   => '<',
@@ -631,7 +582,7 @@ key_name = {
 	'ctrl+w'    => 23,
 	'ctrl+x'    => 24,
 	'ctrl+y'    => 25,
-#	'ctrl+z'    => 26,
+	'ctrl+z'    => 26,
 	'alt'       => 27,
 	'escape'    => 27,
 	'ctrl+?'    => 127,
@@ -955,7 +906,7 @@ load_settings_file = proc { |reload|
 				xml_root.elements.each { |e|
 					if e.name == 'highlight'
 						begin
-							r = Regexp.new(e.text)
+							r = %r{#{e.text}}
 						rescue
 							r = nil
 							$stderr.puts e.to_s
@@ -980,8 +931,8 @@ load_settings_file = proc { |reload|
 		rescue
 			$stdout.puts $!
 			$stdout.puts $!.backtrace[0..1]
-			log $!
-			log $!.backtrace[0..1]
+			Profanity.log $!
+			Profanity.log $!.backtrace[0..1]
 
 		end
 	}
@@ -1171,7 +1122,13 @@ key_action['cursor_home'] = proc {
 		begin
 			command_window.insch(command_buffer[command_buffer_offset-num])
 		rescue
-			File.open('profanity.log', 'a') { |f| f.puts "command_buffer: #{command_buffer.inspect}"; f.puts "command_buffer_offset: #{command_buffer_offset.inspect}"; f.puts "num: #{num.inspect}"; f.puts $!; f.puts $!.backtrace[0...4] }
+			Profanity.log_file { |f| 
+				f.puts "command_buffer: #{command_buffer.inspect}"; 
+				f.puts "command_buffer_offset: #{command_buffer_offset.inspect}"; 
+				f.puts "num: #{num.inspect}"; 
+				f.puts $!; 
+				f.puts $!.backtrace[0...4] 
+			}
 			exit
 		end
 	end
@@ -1254,7 +1211,6 @@ key_action['cursor_delete'] = proc {
 		Curses.doupdate
 	end
 }
-
 
 key_action['cursor_backspace_word'] = proc {
 	num_deleted = 0
@@ -1382,6 +1338,124 @@ key_action['scroll_current_window_bottom'] = proc {
 	end
 	command_window.noutrefresh
 	Curses.doupdate
+}
+
+class String
+	def &(other)
+		shortest, longest = [self, other].sort { |a, b| a.size - b.size }
+
+		shortest.each_char.to_a
+			.zip(longest.each_char.to_a)
+			.take_while { |a, b| a == b }
+			.transpose
+			.first
+			.join("")
+	end
+end
+
+write_to_client = proc { |str, color|
+	stream_handler["main"].add_string str, [{:fg => color, :start => 0, :end => str.size}]
+	command_window.noutrefresh
+	Curses.doupdate
+}
+
+class Autocomplete
+	HIGHLIGHT = "a6e22e"
+
+	@in_menu  = false
+
+	def self.consume(key_code, history:, buffer:)
+		Autocomplete.wrap do
+			return @in_menu = true if key_code == 9 # tab
+			return unless @in_menu
+		end
+	end
+	##
+	## @brief      checks to see if the historical command is a possible 
+	## 						 completion of the current state of the command buffer
+	##
+	## @param      current    String  The current command string
+	## @param      historical String  The historical command string
+	##
+	## @return     Boolean            if it is a possible completion
+	##
+	def self.compare(current, historical)
+		current    = current.split("")
+		historical = historical.split("")
+		current.each_with_index.map { |char, i| char == historical[i] ? 1 : 0 }
+			.reduce(&:+) == current.size
+	end
+	##
+	## @brief      finds the first divergence in an array of Strings that should
+	##
+	## @param      suggestions Array(String)  The suggestions
+	##
+	## @return     String     a String<0..n> of which the characters exist in all suggestions
+	##
+	def self.find_branch(suggestions)
+		suggestions.reduce(&:&)
+	end
+
+	def self.wrap()
+		begin
+			yield
+		rescue Exception => e
+			Profanity.log_file { |f| 
+				f.puts "[autocomplete error #{Time.now}] #{$e.message}"
+				f.puts e.backtrace[0...4] 
+			}
+		end
+	end
+end
+
+key_action['autocomplete'] = Proc.new { |idx|
+	Autocomplete.wrap do 
+		current = command_buffer.dup
+		# no output on empty CLI
+		#return if current.strip.empty?
+
+		history = command_history.map(&:strip).reject(&:empty?).compact.uniq
+
+		# collection of possibilities
+		possibilities = []
+
+		history.each { |historical|
+			if Autocomplete.compare(current, historical)
+				possibilities.push historical
+			end
+		}
+
+		if possibilities.size == 0
+			write_to_client.call "[autocomplete] no suggestions", Autocomplete::HIGHLIGHT
+		end
+
+		if possibilities.size > 1
+			# we should autoprogress the command input until there 
+			# is a divergence in the possible commands
+			divergence = Autocomplete.find_branch(possibilities)
+			
+			command_buffer = divergence
+			command_buffer_offset = [ (command_buffer.length - command_window.maxx + 1), 0 ].max
+			command_buffer_pos = command_buffer.length
+			command_window.addstr divergence[current.size..-1]
+			command_window.setpos(0, divergence.size)
+
+			write_to_client.call("[autocomplete:#{possibilities.size}]", Autocomplete::HIGHLIGHT)
+			possibilities.each_with_index do |command, i| 
+				write_to_client.call("[#{i}] #{command}", Autocomplete::HIGHLIGHT) end
+		end
+
+		idx = 0 if possibilities.size == 1
+
+		if idx && possibilities[idx]
+			command_buffer = possibilities[idx]
+			command_buffer_offset = [ (command_buffer.length - command_window.maxx + 1), 0 ].max
+			command_buffer_pos = command_buffer.length
+			command_window.addstr possibilities.first[current.size..-1]
+			command_window.setpos(0, possibilities.first.size)
+			Curses.doupdate
+		end
+	end
 }
 
 key_action['previous_command'] = proc {
@@ -1575,7 +1649,7 @@ load_layout.call('default')
 
 TextWindow.list.each { |w| w.maxy.times { w.add_string "\n" } }
 
-server = TCPSocket.open('127.0.0.1', PORT)
+server = TCPSocket.open(HOST, PORT)
 
 Thread.new { sleep 15; skip_server_time_offset = false }
 
@@ -1768,7 +1842,7 @@ Thread.new {
 					need_update = true
 				end
 			else
-				while (start_pos = (line =~ /(<(prompt|spell|right|left|inv|compass).*?\2>|<.*?>)/))
+				while (start_pos = (line =~ /(<(prompt|spell|right|left|inv|style|compass).*?\2>|<.*?>)/))
 					xml = $1
 					line.slice!(start_pos, xml.length)
 					if xml =~ /^<prompt time=('|")([0-9]+)\1.*?>(.*?)&gt;<\/prompt>$/
@@ -1801,7 +1875,15 @@ Thread.new {
 							window.update($1 == 'None' ? 0 : 1)
 							need_update = true
 						end
-					elsif xml =~ /^<(right|left)(?:>|\s.*?>).*?(\S*?)<\/\1>/
+					elsif xml =~ /^<streamWindow id='room' title='Room' subtitle=" \- (.*?)"/
+						
+						if window = indicator_handler["room"]
+							window.clear
+							window.label = $1
+							window.update($1 ? 0 : 1)
+							need_update = true
+						end
+					elsif xml =~ /^<(right|left)(?:>|\s.*?>)(.*?)<\/\1>/
 						if window = indicator_handler[$1]
 							window.clear
 							window.label = $2
@@ -1867,6 +1949,8 @@ Thread.new {
 								need_update = true
 							end
 						end
+					elsif xml =~ /^<hand/
+						
 					elsif xml =~ /^<progressBar id='pbarStance' value='([0-9]+)'/
 						if window = progress_handler['stance']
 							if window.update($1.to_i, 100)
@@ -1990,8 +2074,8 @@ Thread.new {
 					elsif xml =~ /^<LaunchURL src="([^"]+)"/
 						url = "\"https://www.play.net#{$1}\""
 						# assume linux if not mac
-						cmd = RUBY_PLATFORM =~ /darwin/ ? "open" : "firefox"
-						system("#{cmd} #{url}")
+						cmd = RUBY_PLATFORM =~ /darwin/ ? "open" : "google-chrome"
+						system("#{cmd} #{url} >/dev/null 2>&1 &")
 					else
 						nil
 					end
@@ -2013,7 +2097,7 @@ Thread.new {
 		command_window.noutrefresh
 		Curses.doupdate
 	rescue
-		File.open('profanity.log', 'a') { |f| f.puts $!; f.puts $!.backtrace[0...4] }
+		Profanity.log { |f| f.puts $!; f.puts $!.backtrace[0...4] }
 		exit
 	end
 }
@@ -2022,6 +2106,7 @@ begin
 	key_combo = nil
 	loop {
 		ch = command_window.getch
+		Autocomplete.consume(ch, history: command_history, buffer: command_buffer)
 		if key_combo
 			if key_combo[ch].class == Proc
 				key_combo[ch].call
@@ -2042,7 +2127,7 @@ begin
 		end
 	}
 rescue
-	File.open('profanity.log', 'a') { |f| f.puts $!; f.puts $!.backtrace[0...4] }
+	Profanity.log($!.backtrace)
 ensure
 	server.close rescue()
 	Curses.close_screen

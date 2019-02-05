@@ -12,6 +12,8 @@ if [[ -z $DISPLAY ]]; then
   export DISPLAY=:0
 fi
 
+character=$(echo $1 | tr '[:upper:]' '[:lower:]')
+
 if ps aux | \grep lich[.]rb | \grep -i $1; then
   lich_instance=$(ps aux | \grep lich[.]rb | \grep -i $1)
   already_connected="1"
@@ -29,7 +31,7 @@ else
   sleep 2
 fi
 
-PROFANITY_CMD="ruby ./profanity.rb --port=$port"
+PROFANITY_CMD="ruby ./profanity.rb --char=$character --port=$port"
 
 if [[ "$1" =~ ^(Gortun|Monit|Sazyd|Reodin)$ ]]; then
   PROFANITY_CMD="$PROFANITY_CMD --settings-file=profanity_ebongate.xml"
