@@ -2124,7 +2124,7 @@ Thread.new {
 		command_window.noutrefresh
 		Curses.doupdate
 	rescue
-		Profanity.log { |f| f.puts $!; f.puts $!.backtrace[0...4] }
+		Profanity.log_file { |f| f.puts $!; f.puts $!.backtrace[0...4] }
 		exit
 	end
 }
@@ -2154,7 +2154,7 @@ begin
 		end
 	}
 rescue
-	Profanity.log { |f| f.puts $!; f.puts $!.backtrace[0...4] }
+	Profanity.log_file { |f| f.puts $!; f.puts $!.backtrace[0...4] }
 ensure
 	server.close rescue()
 	Curses.close_screen
